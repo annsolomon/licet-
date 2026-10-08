@@ -1,0 +1,21 @@
+{
+  "name": "college-portals-ui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev:hod": "PORTAL=hod vite --host 0.0.0.0 --port 5174",
+    "dev:parent": "PORTAL=parent vite --host 0.0.0.0 --port 5175",
+    "dev:advisor": "PORTAL=advisor vite --host 0.0.0.0 --port 5176",
+    "dev:student": "PORTAL=student vite --host 0.0.0.0 --port 5177",
+    "build": "PORTAL=hod vite build && PORTAL=parent vite build && PORTAL=advisor vite build && PORTAL=student vite build"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "4.3.2",
+    "vite": "5.4.8"
+  }
+}

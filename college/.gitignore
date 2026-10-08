@@ -1,0 +1,10 @@
+node_modules/
+dist/
+target/
+logs/
+.run/
+output/*.txt
+*.class
+portals/target
+portals-ui/node_modules
+portals-ui/dist
