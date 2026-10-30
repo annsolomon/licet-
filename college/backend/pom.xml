@@ -46,6 +46,13 @@
       <version>23.5.0.24.07</version>
     </dependency>
 
+    <!-- Oracle wallet support (cwallet.sso) for the Oracle Cloud Autonomous Database (mTLS) -->
+    <dependency>
+      <groupId>com.oracle.database.security</groupId>
+      <artifactId>oraclepki</artifactId>
+      <version>23.5.0.24.07</version>
+    </dependency>
+
     <!-- JUnit 5 for the unit tests (mvn test) -->
     <dependency>
       <groupId>org.springframework.boot</groupId>

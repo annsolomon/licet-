@@ -37,7 +37,7 @@ run_script sys_sql database/14_users_roles.sql
 run_script app_sql database/15_post_setup.sql
 # optional add-on: HOD / parent / advisor portals (240 students, 8-period attendance, absence notifications)
 if [ -f database/16_portal_schema.sql ]; then
-  for f in 16_portal_schema 17_portal_data 18_portal_trigger 19_portal_digest 20_portal_fix 21_portal_internals; do run_script app_sql "database/$f.sql"; done
+  for f in 16_portal_schema 17_portal_data 18_portal_trigger 19_portal_digest 20_portal_fix 21_portal_internals 22_absentee_list; do run_script app_sql "database/$f.sql"; done
 fi
 
 say "Checking that every PL/SQL object compiled"

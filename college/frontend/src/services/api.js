@@ -1,5 +1,7 @@
 // All HTTP calls live here. Every call:  React page -> api.js -> fetch('/api/...') -> Spring Boot controller.
 const TOKEN_KEY = 'college.token';
+// Deployed build: the API lives on another origin (Render). Locally empty -> Vite proxies /api.
+const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
 export const session = {
   get token() { try { return localStorage.getItem(TOKEN_KEY); } catch { return null; } },
@@ -23,13 +25,13 @@ async function request(method, url, body) {
   if (session.token) headers.Authorization = `Bearer ${session.token}`;
   let res;
   try {
-    res = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    res = await fetch(API_BASE + url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   } catch {
-    throw new ApiError(0, { message: 'Cannot reach the backend on port 8080. Is it running? (./run.sh)', layer: 'Network' });
+    throw new ApiError(0, { message: API_BASE ? 'Cannot reach the backend (it may be waking up - try again in a minute).' : 'Cannot reach the backend on port 8080. Is it running? (./run.sh)', layer: 'Network' });
   }
   if (res.status === 401 && !url.endsWith('/auth/login')) {
     session.clear();
-    window.location.assign('/login');
+    window.location.reload();          // App sees no token and shows the login page (works with any router/base)
   }
   if (res.status === 204) return null;
   const text = await res.text();
@@ -45,7 +47,7 @@ export const api = {
   put: (url, body) => request('PUT', url, body),
   del: (url) => request('DELETE', url),
   async download(url, filename) {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${session.token}` } });
+    const res = await fetch(API_BASE + url, { headers: { Authorization: `Bearer ${session.token}` } });
     if (!res.ok) throw new ApiError(res.status, await res.json().catch(() => null));
     const blob = await res.blob();
     const a = document.createElement('a');

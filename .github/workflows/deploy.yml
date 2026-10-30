@@ -1,0 +1,137 @@
+# Build, test and deploy the College app.
+#   frontend -> GitHub Pages            (free, HTTPS)
+#   backend  -> Render free web service (free, HTTPS, Docker)  - env vars pushed from GitHub secrets
+#   database -> Oracle Autonomous DB Always Free (loaded once by setup-database.yml)
+# Nothing deploys after vars.DEMO_EXPIRES_AT (the 1-week demo window).
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths: ['college/**', '.github/workflows/deploy.yml']
+  pull_request:
+    paths: ['college/**', '.github/workflows/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  DEMO_EXPIRES_AT: ${{ vars.DEMO_EXPIRES_AT }}
+
+jobs:
+  window:
+    name: Check demo window
+    runs-on: ubuntu-latest
+    outputs:
+      open: ${{ steps.check.outputs.open }}
+    steps:
+      - id: check
+        env:
+          API_URL: ${{ vars.API_URL }}
+        run: |
+          if [ -z "$DEMO_EXPIRES_AT" ] || [ -z "$API_URL" ]; then
+            echo "::notice::Not configured yet: set repository variables DEMO_EXPIRES_AT and API_URL (see DEPLOY.md). Tests still run."
+            echo "open=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          now=$(date -u +%s); end=$(date -u -d "$DEMO_EXPIRES_AT" +%s)
+          if [ "$now" -lt "$end" ]; then echo "open=true" >> "$GITHUB_OUTPUT"; else echo "open=false" >> "$GITHUB_OUTPUT"; echo "Demo window has ended - nothing will be deployed."; fi
+
+  backend-test:
+    name: Backend tests (JUnit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '21', cache: maven }
+      - run: mvn -B -q test
+        working-directory: college/backend
+      - name: Docker image builds
+        run: docker build -t college-backend college/backend
+
+  frontend-build:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: npm, cache-dependency-path: college/frontend/package-lock.json }
+      - run: npm ci --no-audit --no-fund
+        working-directory: college/frontend
+      - name: Build for GitHub Pages
+        working-directory: college/frontend
+        env:
+          VITE_API_URL: ${{ vars.API_URL }}
+          VITE_BASE: /${{ github.event.repository.name }}/
+          VITE_HASH_ROUTER: 'true'
+        run: |
+          npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: college/frontend/dist }
+
+  deploy-backend:
+    name: Deploy backend to Render
+    needs: [window, backend-test]
+    if: needs.window.outputs.open == 'true' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Push settings to Render and deploy
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          SERVICE: ${{ secrets.RENDER_SERVICE_ID }}
+          ORACLE_URL: jdbc:oracle:thin:@${{ secrets.ADB_SERVICE }}?TNS_ADMIN=/app/wallet
+          ORACLE_PASSWORD: ${{ secrets.COLLEGE_DB_PASSWORD }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          FACULTY_PASSWORD: ${{ secrets.FACULTY_PASSWORD }}
+          PAGES_ORIGIN: https://${{ github.repository_owner }}.github.io
+        run: |
+          set -euo pipefail
+          for v in RENDER_API_KEY SERVICE ORACLE_PASSWORD ADMIN_PASSWORD FACULTY_PASSWORD; do
+            [ -n "${!v}" ] || { echo "::error::secret for $v is missing"; exit 1; }
+          done
+          api() { curl -fsS -H "Authorization: Bearer $RENDER_API_KEY" -H "Accept: application/json" "$@"; }
+          setenv() {   # setenv KEY VALUE  (value sent as JSON, never printed)
+            jq -n --arg v "$2" '{value:$v}' | api -X PUT -H "Content-Type: application/json" \
+              --data @- "https://api.render.com/v1/services/$SERVICE/env-vars/$1" > /dev/null
+            echo "set $1"
+          }
+          setenv SPRING_PROFILES_ACTIVE prod
+          setenv ORACLE_URL "$ORACLE_URL"
+          setenv ORACLE_USER college
+          setenv ORACLE_PASSWORD "$ORACLE_PASSWORD"
+          setenv ADMIN_PASSWORD "$ADMIN_PASSWORD"
+          setenv FACULTY_PASSWORD "$FACULTY_PASSWORD"
+          setenv CORS_ORIGINS "$PAGES_ORIGIN"
+          setenv APP_EXPIRES_AT "$DEMO_EXPIRES_AT"
+          api -X POST -H "Content-Type: application/json" --data '{"clearCache":"do_not_clear"}' \
+            "https://api.render.com/v1/services/$SERVICE/deploys" > /dev/null
+          echo "Render deploy started"
+      - name: Wait until the API is healthy
+        env:
+          API_URL: ${{ vars.API_URL }}
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 20 "$API_URL/api/health" | grep -q '"database":"UP"'; then echo "API is up"; exit 0; fi
+            sleep 15
+          done
+          echo "::warning::API did not report healthy within 15 minutes - check the Render logs"
+
+  deploy-frontend:
+    name: Deploy frontend to GitHub Pages
+    needs: [window, frontend-build, backend-test]
+    if: needs.window.outputs.open == 'true' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

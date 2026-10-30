@@ -33,6 +33,14 @@ export default function Attendance({ role }) {
     department: depts.data?.map((d) => ({ value: d.id, label: `${d.code}` })),
   }[view];
 
+  // ---------- absentees per period: one row per student
+  const [abs, setAbs] = useState({ date: '', classId: '', period: '' });
+  const absentees = useApi(
+    () => api.get(`/api/attendance/absentees${qs(abs)}`),
+    [abs.date, abs.classId, abs.period],
+  );
+  const absRows = absentees.data?.rows || [];
+
   // ---------- mark a sheet
   const [sheet, setSheet] = useState({ classId: '', subjectId: '', facultyId: '', date: today(), period: 1 });
   const [status, setStatus] = useState({});
@@ -46,13 +54,35 @@ export default function Attendance({ role }) {
       classId: Number(sheet.classId), subjectId: Number(sheet.subjectId), facultyId: Number(sheet.facultyId),
       date: sheet.date, period: Number(sheet.period), records,
     }));
-    if (res) summary.reload();
+    if (res) { summary.reload(); absentees.reload(); }
   };
 
   return (
     <div>
       <PageHeader title="Attendance" subtitle="Mark a class period and view attendance by student, subject, class or department"
         flow={['React sheet', 'POST /api/attendance', 'AttendanceController', 'AttendanceService (validate class/subject/faculty)', 'AttendanceRepository', 'JdbcTemplate batchUpdate (MERGE)', 'attendance_session + attendance_record', 'Oracle', 'calculate_attendance()']} />
+      <Card title="Absentees by period">
+        <div className="row">
+          <input type="date" value={abs.date || absentees.data?.date || ''} onChange={(e) => setAbs({ ...abs, date: e.target.value })} />
+          <Select value={abs.classId} onChange={(v) => setAbs({ ...abs, classId: v })} placeholder="All classes"
+            options={classes.data?.map((c) => ({ value: c.id, label: c.name }))} />
+          <select value={abs.period} onChange={(e) => setAbs({ ...abs, period: e.target.value })}>
+            <option value="">All periods</option>
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((p) => <option key={p} value={p}>Period {p}</option>)}
+          </select>
+          <span className="muted">{absentees.data ? `${absentees.data.count} absent on ${absentees.data.date}` : ''}</span>
+        </div>
+        <ErrorBox error={absentees.error} />
+        <DataTable empty="No absentees for this selection" rows={absRows} columns={[
+          { key: 'period', label: 'Period' },
+          { key: 'sno', label: 'No.' },
+          { key: 'studentId', label: 'Student ID' },
+          { key: 'studentName', label: 'Student' },
+          { key: 'className', label: 'Class' },
+          { key: 'subjectCode', label: 'Subject', render: (r) => `${r.subjectCode} ${r.subjectName}` },
+          { key: 'facultyName', label: 'Faculty' },
+        ]} />
+      </Card>
       <Card title="View attendance">
         <div className="row">
           <select value={view} onChange={(e) => { setView(e.target.value); setTarget(''); }}>

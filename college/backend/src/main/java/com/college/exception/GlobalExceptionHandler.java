@@ -33,6 +33,8 @@ import java.util.regex.Pattern;
 public class GlobalExceptionHandler {
 
     private static final Logger LOG = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    /** In production (APP_HIDE_ERROR_DETAILS=true) unexpected errors do not reveal internal messages. */
+    private static final boolean HIDE_DETAILS = Boolean.parseBoolean(System.getenv().getOrDefault("APP_HIDE_ERROR_DETAILS", "false"));
     private static final Pattern ORA = Pattern.compile("ORA-(\\d{5})[: ]*([^\\n]*)");
     private static final Pattern CONSTRAINT = Pattern.compile("\\(([A-Z0-9_]+\\.[A-Z0-9_]+)\\)");
 
@@ -111,8 +113,9 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> other(Exception e) {
         LOG.error("Unhandled error", e);
-        return build(HttpStatus.INTERNAL_SERVER_ERROR, "InternalError",
-                e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage(), "Spring exception handling");
+        String msg = HIDE_DETAILS ? "Unexpected server error"
+                : e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+        return build(HttpStatus.INTERNAL_SERVER_ERROR, "InternalError", msg, "Spring exception handling");
     }
 
     // ------------------------------------------------------------------ helpers

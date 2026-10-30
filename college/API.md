@@ -20,6 +20,7 @@ Roles: **ADMIN** everything. **FACULTY** may read everything except employees / 
 | GET/POST/PUT/DELETE `/api/classes` | `{name,departmentId,semester,section,academicYear}` |
 | GET/POST `/api/classes/assignments`, DELETE `/api/classes/assignments/{id}` | `{classId,subjectId,facultyId}` |
 | POST `/api/attendance` | `{classId,subjectId,facultyId,date,period,records:[{studentId,status}]}` status: PRESENT, ABSENT, OD, MEDICAL, OTHER |
+| GET `/api/attendance/absentees?date=&classId=&period=` | absentees of a day, ONE ROW PER STUDENT per period (all params optional; no date = latest day) |
 | POST `/api/attendance/procedure` | `{sessionId,studentId,status}` via PL/SQL `mark_attendance` |
 | GET `/api/attendance/student/{id}` `/subject/{id}` `/class/{id}` `/department/{id}` `/all` `/low?threshold=75` | summaries |
 | GET `/api/attendance/student/{id}/records`, `/sessions?classId=&subjectId=`, `/sessions/{id}` | detail |

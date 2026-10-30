@@ -153,6 +153,25 @@ public class AttendanceService {
         return low;
     }
 
+    /**
+     * ABSENTEES PER PERIOD, one row per student (not grouped).
+     * date = null -> the latest day attendance was taken. classId / period optional.
+     */
+    public Map<String, Object> absentees(String date, Long classId, Integer period) {
+        if (period != null && (period < 1 || period > 8)) {
+            throw new ValidationException("Period must be between 1 and 8");
+        }
+        LocalDate day = date == null || date.isBlank()
+                ? repository.latestSessionDate(classId).orElse(LocalDate.now())
+                : parseDate(date);
+        List<com.college.dto.AbsenteeLine> rows = repository.absentees(day, classId, period);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("date", day.toString());
+        result.put("count", rows.size());
+        result.put("rows", rows);
+        return result;
+    }
+
     public List<AttendanceLine> records(long studentId) {
         return repository.linesForStudent(studentId);
     }
