@@ -1,0 +1,72 @@
+# Ends the 1-week demo: once vars.DEMO_EXPIRES_AT has passed it
+#   1. suspends the Render backend (stops it; nothing keeps running or costs anything)
+#   2. replaces the GitHub Pages site with a "demo ended" page
+# The backend also refuses every request after APP_EXPIRES_AT on its own (HTTP 410), so the demo is closed
+# even if this workflow is late.
+name: Demo expiry
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'End the demo now (type END)'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  expire:
+    runs-on: ubuntu-latest
+    outputs:
+      ended: ${{ steps.check.outputs.ended }}
+    steps:
+      - id: check
+        env:
+          DEMO_EXPIRES_AT: ${{ vars.DEMO_EXPIRES_AT }}
+          FORCE: ${{ github.event.inputs.force }}
+        run: |
+          if [ "$FORCE" = "END" ]; then echo "ended=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          [ -n "$DEMO_EXPIRES_AT" ] || { echo "ended=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          now=$(date -u +%s); end=$(date -u -d "$DEMO_EXPIRES_AT" +%s)
+          if [ "$now" -ge "$end" ] && [ "$now" -lt $((end + 10800)) ]; then   # act during the 3 hours after expiry
+            echo "ended=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ended=false" >> "$GITHUB_OUTPUT"; echo "Demo still running until $DEMO_EXPIRES_AT"
+          fi
+      - name: Suspend Render backend
+        if: steps.check.outputs.ended == 'true'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          SERVICE: ${{ secrets.RENDER_SERVICE_ID }}
+        run: |
+          [ -n "$RENDER_API_KEY" ] || exit 0
+          status=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $RENDER_API_KEY" \
+            "https://api.render.com/v1/services/$SERVICE/suspend")
+          echo "Render suspend -> HTTP $status"
+      - name: Build "demo ended" page
+        if: steps.check.outputs.ended == 'true'
+        run: |
+          mkdir -p site
+          cat > site/index.html <<'HTML'
+          <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+          <title>Demo ended</title><style>body{font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#f6f7f9;color:#222}</style>
+          </head><body><main><h1>This demo has ended</h1><p>The College Academic Management System demo was available for one week.</p></main></body></html>
+          HTML
+      - if: steps.check.outputs.ended == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with: { path: site }
+
+  pages:
+    needs: expire
+    if: needs.expire.outputs.ended == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+    steps:
+      - uses: actions/deploy-pages@v4

@@ -160,6 +160,51 @@ public class AttendanceRepository {
         return jdbc.query(LINES_SQL + " WHERE ar.session_id = ? ORDER BY ar.student_id", LINE_MAPPER, sessionId);
     }
 
+    // ------------------------------------------------------------------ absentees, one row per student
+    /**
+     * Every ABSENT record of one day, one row per student per period (no LISTAGG / grouping).
+     * classId and period are optional filters (null = all).
+     */
+    public List<com.college.dto.AbsenteeLine> absentees(LocalDate date, Long classId, Integer period) {
+        StringBuilder sql = new StringBuilder("""
+                SELECT ROW_NUMBER() OVER (PARTITION BY se.session_id ORDER BY s.student_id) AS sno,
+                       se.session_date, se.period_no, se.session_id, c.class_id, c.class_name,
+                       sb.subject_code, sb.subject_name, f.faculty_name, s.student_id, s.student_name, ar.status
+                  FROM attendance_record  ar
+                  JOIN attendance_session se ON se.session_id = ar.session_id
+                  JOIN class              c  ON c.class_id    = se.class_id
+                  JOIN subject            sb ON sb.subject_id = se.subject_id
+                  JOIN faculty            f  ON f.faculty_id  = se.faculty_id
+                  JOIN student            s  ON s.student_id  = ar.student_id
+                 WHERE ar.status = 'ABSENT' AND se.session_date = ?
+                """);
+        List<Object> args = new ArrayList<>();
+        args.add(RsUtil.sqlDate(date));
+        if (classId != null) {
+            sql.append(" AND se.class_id = ?");
+            args.add(classId);
+        }
+        if (period != null) {
+            sql.append(" AND se.period_no = ?");
+            args.add(period);
+        }
+        sql.append(" ORDER BY se.period_no, c.class_name, s.student_id");
+        return jdbc.query(sql.toString(), (rs, i) -> new com.college.dto.AbsenteeLine(
+                rs.getInt("sno"), RsUtil.dateText(rs, "session_date"), rs.getInt("period_no"), rs.getLong("session_id"),
+                rs.getLong("class_id"), rs.getString("class_name"), rs.getString("subject_code"),
+                rs.getString("subject_name"), rs.getString("faculty_name"), rs.getLong("student_id"),
+                rs.getString("student_name"), rs.getString("status")), args.toArray());
+    }
+
+    /** Latest day on which attendance was taken (default date for the absentee list). */
+    public Optional<LocalDate> latestSessionDate(Long classId) {
+        java.sql.Date d = classId == null
+                ? jdbc.queryForObject("SELECT MAX(session_date) FROM attendance_session", java.sql.Date.class)
+                : jdbc.queryForObject("SELECT MAX(session_date) FROM attendance_session WHERE class_id = ?",
+                        java.sql.Date.class, classId);
+        return Optional.ofNullable(d).map(java.sql.Date::toLocalDate);
+    }
+
     /** Sessions held for a class + subject (to pick a sheet to view). */
     public List<java.util.Map<String, Object>> sessions(long classId, long subjectId) {
         return jdbc.queryForList("""

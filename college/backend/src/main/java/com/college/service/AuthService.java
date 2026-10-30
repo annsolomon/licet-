@@ -26,13 +26,21 @@ import java.util.concurrent.ConcurrentHashMap;
 public class AuthService {
 
     /** Who a token belongs to. */
-    public record Session(String username, String fullName, String role) { }
+    public record Session(String username, String fullName, String role, long expiresAtMs) {
+        public Session(String username, String fullName, String role) {
+            this(username, fullName, role, Long.MAX_VALUE);
+        }
+    }
 
     private final UserRepository users;
     private final Map<String, Session> sessions = new ConcurrentHashMap<>();   // thread-safe map: token -> session
 
-    public AuthService(UserRepository users) {
+    private final long ttlMs;
+
+    public AuthService(UserRepository users,
+                       @org.springframework.beans.factory.annotation.Value("${app.session-hours:8}") int sessionHours) {
         this.users = users;
+        this.ttlMs = sessionHours * 3_600_000L;
     }
 
     public LoginResponse login(LoginRequest request) {
@@ -42,19 +50,30 @@ public class AuthService {
         }
         AppUser user = users.findByUsername(request.username().trim())
                 .orElseThrow(() -> new UnauthorizedException("Invalid username or password"));
-        if (!user.passwordHash().equals(PasswordUtil.hash(request.password()))) {
+        if (!java.security.MessageDigest.isEqual(user.passwordHash().getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                PasswordUtil.hash(request.password()).getBytes(java.nio.charset.StandardCharsets.UTF_8))) {   // constant-time compare
             throw new UnauthorizedException("Invalid username or password");
         }
         if (!"ADMIN".equals(user.role()) && !"FACULTY".equals(user.role())) {
             throw new UnauthorizedException("HOD, advisor and parent accounts sign in to their own portal, not here");
         }
         String token = UUID.randomUUID().toString();
-        sessions.put(token, new Session(user.username(), user.fullName(), user.role()));
+        long now = System.currentTimeMillis();
+        sessions.values().removeIf(sess -> sess.expiresAtMs() < now);            // drop expired tokens
+        sessions.put(token, new Session(user.username(), user.fullName(), user.role(), now + ttlMs));
         return new LoginResponse(token, user.username(), user.fullName(), user.role());
     }
 
     public Optional<Session> find(String token) {
-        return token == null ? Optional.empty() : Optional.ofNullable(sessions.get(token));
+        if (token == null) {
+            return Optional.empty();
+        }
+        Session s = sessions.get(token);
+        if (s != null && s.expiresAtMs() < System.currentTimeMillis()) {
+            sessions.remove(token);
+            return Optional.empty();
+        }
+        return Optional.ofNullable(s);
     }
 
     public void logout(String token) {

@@ -1,0 +1,22 @@
+# Render free services sleep after 15 idle minutes and Oracle Always Free stops after 7 idle days.
+# During the demo window this pings the API so the first visitor does not wait a minute.
+name: Keep alive
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          API_URL: ${{ vars.API_URL }}
+          DEMO_EXPIRES_AT: ${{ vars.DEMO_EXPIRES_AT }}
+        run: |
+          [ -n "$API_URL" ] && [ -n "$DEMO_EXPIRES_AT" ] || exit 0
+          [ "$(date -u +%s)" -lt "$(date -u -d "$DEMO_EXPIRES_AT" +%s)" ] || { echo "demo ended"; exit 0; }
+          curl -sS --max-time 90 "$API_URL/api/health" || true

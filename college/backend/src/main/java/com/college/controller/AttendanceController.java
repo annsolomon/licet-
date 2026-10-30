@@ -51,6 +51,14 @@ public class AttendanceController {
     @GetMapping("/low")
     public List<AttendanceSummary> low(@RequestParam(required = false) Integer threshold) { return service.low(threshold); }
 
+    /** Absentees of a day, ONE ROW PER STUDENT per period. ?date=2026-10-08&classId=1&period=3 (all optional). */
+    @GetMapping("/absentees")
+    public Map<String, Object> absentees(@RequestParam(required = false) String date,
+                                         @RequestParam(required = false) Long classId,
+                                         @RequestParam(required = false) Integer period) {
+        return service.absentees(date, classId, period);
+    }
+
     @GetMapping("/sessions")
     public List<Map<String, Object>> sessions(@RequestParam long classId, @RequestParam long subjectId) {
         return service.sessions(classId, subjectId);

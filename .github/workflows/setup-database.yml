@@ -1,0 +1,113 @@
+# Loads (or re-loads) the COLLEGE schema + demo data into Oracle Autonomous Database (Always Free).
+# Run manually: Actions -> Setup database -> Run workflow -> type RESET.
+# Uses the same SQL scripts as ./setup-db.sh, with the changes Autonomous DB needs:
+#   strong passwords from secrets (instead of college123 / faculty123 / student123), tablespace DATA instead of USERS.
+name: Setup database
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Drops and recreates every COLLEGE object. Type RESET to continue.'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    if: github.event.inputs.confirm == 'RESET'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      ADB_SERVICE: ${{ secrets.ADB_SERVICE }}
+      ADB_ADMIN_PASSWORD: ${{ secrets.ADB_ADMIN_PASSWORD }}
+      COLLEGE_DB_PASSWORD: ${{ secrets.COLLEGE_DB_PASSWORD }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+      FACULTY_PASSWORD: ${{ secrets.FACULTY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '21' }
+
+      - name: Install SQLcl
+        run: |
+          curl -fsSL -o /tmp/sqlcl.zip https://download.oracle.com/otn_software/java/sqldeveloper/sqlcl-latest.zip
+          unzip -q /tmp/sqlcl.zip -d "$HOME" && echo "$HOME/sqlcl/bin" >> "$GITHUB_PATH"
+
+      - name: Wallet
+        env:
+          ADB_WALLET_B64: ${{ secrets.ADB_WALLET_B64 }}
+        run: |
+          umask 077
+          for v in ADB_WALLET_B64 ADB_SERVICE ADB_ADMIN_PASSWORD COLLEGE_DB_PASSWORD ADMIN_PASSWORD FACULTY_PASSWORD; do
+            [ -n "${!v}" ] || { echo "::error::secret $v is missing"; exit 1; }
+          done
+          printf '%s' "$ADB_WALLET_B64" | base64 -d > "$RUNNER_TEMP/wallet.zip"
+
+      - name: Prepare scripts for Autonomous DB
+        run: |
+          set -euo pipefail
+          umask 077
+          W="$RUNNER_TEMP/sql"; mkdir -p "$W"; cp college/database/*.sql "$W/"
+          FAC_PW="Fa$(openssl rand -hex 10)9x"; STU_PW="St$(openssl rand -hex 10)9x"
+          echo "::add-mask::$FAC_PW"; echo "::add-mask::$STU_PW"
+          python3 - "$W" "$FAC_PW" "$STU_PW" <<'PY'
+          import os, sys
+          w, fac, stu = sys.argv[1:4]
+          college = os.environ['COLLEGE_DB_PASSWORD']
+          def sub(name, pairs):
+              p = os.path.join(w, name); s = open(p).read()
+              for a, b in pairs:
+                  if a not in s: sys.exit(f'{name}: expected text not found: {a}')
+                  s = s.replace(a, b)
+              open(p, 'w').write(s)
+          sub('00_admin_setup.sql', [("IDENTIFIED BY college123 QUOTA UNLIMITED ON USERS",
+                                      f'IDENTIFIED BY "{college}" QUOTA UNLIMITED ON DATA')])
+          sub('14_users_roles.sql', [("IDENTIFIED BY faculty123", f'IDENTIFIED BY "{fac}"'),
+                                     ("IDENTIFIED BY student123", f'IDENTIFIED BY "{stu}"')])
+          PY
+          # login passwords of the web app (SHA-256 with the app's salt, same as PasswordUtil)
+          {
+            echo "SET DEFINE OFF"
+            echo "UPDATE app_user SET password_hash = LOWER(RAWTOHEX(STANDARD_HASH('college-salt:' || '${ADMIN_PASSWORD//\'/\'\'}', 'SHA256'))) WHERE username = 'admin';"
+            echo "UPDATE app_user SET password_hash = LOWER(RAWTOHEX(STANDARD_HASH('college-salt:' || '${FACULTY_PASSWORD//\'/\'\'}', 'SHA256'))) WHERE username = 'faculty';"
+            echo "COMMIT;"
+          } > "$W/99_passwords.sql"
+
+      - name: Load schema
+        run: |
+          set -uo pipefail
+          W="$RUNNER_TEMP/sql"
+          run() {   # run <admin|college> <file>
+            local user pw
+            if [ "$1" = admin ]; then user=admin; pw="$ADB_ADMIN_PASSWORD"; else user=college; pw="$COLLEGE_DB_PASSWORD"; fi
+            printf '  %-28s' "$(basename "$2")"
+            out="$({ echo "set cloudconfig $RUNNER_TEMP/wallet.zip"; echo "connect $user/\"$pw\"@$ADB_SERVICE";
+                     echo "SET SERVEROUTPUT ON SIZE UNLIMITED"; cat "$2"; echo; echo "EXIT"; } | sql -S /nolog 2>&1)"
+            rc=$?
+            if [ $rc -ne 0 ] || echo "$out" | grep -qE "^(ORA|SP2|PLS)-[0-9]+|Error starting at line|Errors: check compiler log"; then
+              echo "FAILED"; echo "$out" | tail -30; exit 1
+            fi
+            echo "done"
+          }
+          exists=$({ echo "set cloudconfig $RUNNER_TEMP/wallet.zip"; echo "connect admin/\"$ADB_ADMIN_PASSWORD\"@$ADB_SERVICE";
+                     echo "SET HEADING OFF FEEDBACK OFF PAGESIZE 0"; echo "SELECT 'EXISTS' FROM dba_users WHERE username='COLLEGE';"; echo EXIT; } | sql -S /nolog)
+          if echo "$exists" | grep -q EXISTS; then run college "$W/00_drop_all.sql"; fi
+          run admin "$W/00_admin_setup.sql"
+          for f in 01_tables 02_constraints 03_sequences 04_sample_data 06_functions 07_procedures 09_triggers 10_cursors 11_exceptions 12_views 13_indexes; do
+            run college "$W/$f.sql"
+          done
+          run admin "$W/14_users_roles.sql"
+          run college "$W/15_post_setup.sql"
+          for f in 16_portal_schema 17_portal_data 18_portal_trigger 19_portal_digest 20_portal_fix 21_portal_internals 22_absentee_list 99_passwords; do
+            run college "$W/$f.sql"
+          done
+          errs=$({ echo "set cloudconfig $RUNNER_TEMP/wallet.zip"; echo "connect college/\"$COLLEGE_DB_PASSWORD\"@$ADB_SERVICE";
+                   echo "SET HEADING OFF FEEDBACK OFF PAGESIZE 0"; echo "SELECT name||' '||type||' line '||line||': '||text FROM user_errors;"; echo EXIT; } | sql -S /nolog)
+          if [ -n "$(echo "$errs" | tr -d '[:space:]')" ]; then echo "$errs"; echo "::error::PL/SQL compile errors"; exit 1; fi
+          echo "Database ready."
+
+      - name: Clean up
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/sql" "$RUNNER_TEMP/wallet.zip"
